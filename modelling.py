@@ -42,23 +42,14 @@ plt.rcParams['figure.figsize']=(14,14)
 dev='cpu'
 if torch.cuda.is_available():
   dev='cuda'
+print(dev)
 dev=torch.device(dev)
 plt.style.use('fivethirtyeight')
 
-from google.colab import drive
-drive.mount('/content/drive')
 
-!unzip /content/drive/MyDrive/5_DCIS_train.zip
-
-file = '/content/5_DCIS'
+file = '../dcis/5_DCIS'
 import os
 import shutil
-for i in os.listdir(file):
-  ok=i.split('.');
-  if ok[1]!='png' or len(ok)>2:
-    print(i)
-    shutil.rmtree(os.path.join(file,i))
-
 def change_intensity(image):
   image=np.copy(image)
   for i in range(image.shape[0]):
@@ -106,12 +97,26 @@ def func_(img):
 
 L=[]
 cnt=0;
-for i in os.listdir('/content/5_DCIS'):
-  if cnt>10:
-    break
-  L.append([os.path.join('/content/5_DCIS',i),0])
-  cnt+=1
+'''
+for i in os.listdir('../dcis/5_DCIS'):
+  if '.png' in i and  i.split('.')[1]!='png':
+      continue
+  if cnt>700:
+      break
 
+  L.append([os.path.join('../dcis/5_DCIS',i),0])
+  cnt+=1
+cnt=0
+'''
+for i in os.listdir('../normal/0_N'):
+    if '.png' in i and i.split('.')[1]!='png':
+        continue
+    if cnt>700:
+        break;
+    L.append([os.path.join('../normal/0_N',i),1])
+    cnt+=1
+
+print(len(L))
 class CreateDataset(Dataset):
     def __init__(self,path,transforms=None):
       self.path=path
@@ -119,42 +124,77 @@ class CreateDataset(Dataset):
     def __len__(self):
       return self.path.__len__()
     def __getitem__(self,indx):
-      img=func_(imread(self.path[indx][0]))
+      img=imread(self.path[indx][0])
+      img=func_(img)
       img=torch.tensor(img.reshape(3,1024,1024),dtype=torch.float32)
       if self.transforms:
         img=self.transforms(img)
       label=torch.tensor([self.path[indx][1]],dtype=torch.float32)
       return img,label
-datas=CreateDataset(L,transforms=transforms.Compose([transforms.RandomHorizontalFlip(),transforms.Normalize(mean=(0.42,0.41,0.38),std=(0.23,0.22,0.24))]))
-traind,vald=torch.utils.data.dataset.random_split(datas,[len(datas)*0.8,len(datas)-len(datas)*0.8)
-Train=DataLoader(traind,shuffle=True,batch_size=2,drop_last=True)
-Val=DataLoader(vald,shuffle=True,batch_size=2,drop_last=True)
-
-for x,y in Train:
-  print(x.shape,y.shape)
-  break
-
+datas=CreateDataset(L,transforms=transforms.Compose([transforms.RandomHorizontalFlip(),transforms.Normalize(mean=(0.32,0.31,0.39),std=(0.23,0.22,0.24))]))
+traind,vald=torch.utils.data.dataset.random_split(datas,[int(len(datas)*0.2),len(datas)-int(len(datas)*0.2)])
+Train=DataLoader(traind,shuffle=True,batch_size=4,drop_last=True)
+Val=DataLoader(datas,shuffle=True,batch_size=4,drop_last=True)
 import tqdm
-dev=torch.device('cuda')
+#dev=torch.device('cuda')
 model_ft = models.resnet18(pretrained=True)
 num_ftrs = model_ft.fc.in_features
 model_ft.fc = nn.Sequential(
-    nn.Linear(num_ftrs, 64),
+    nn.Linear(num_ftrs, 128),
+    nn.ReLU(inplace=True),
+    nn.Linear(128,64),
     nn.ReLU(inplace=True),
     nn.Linear(64,1)
 )
-
-
+import sys
 model_ft = model_ft.to(dev)
-
+model_ft=torch.load('model.pt')
+tmp1=None
+tmp2=None
+C=0
+T=0
+fp=0
+fn=0
+tp=0
+tn=0
+hh=tqdm.tqdm(Val,desc="Accuracy")
+for x,y in hh:
+    pred=torch.sigmoid(model_ft(x.to(dev)))
+    for i in range(len(pred)):
+        if pred[i][0]>=0.25:
+            pred[i][0]=1
+        else:
+            pred[i][0]=0
+        if int(pred[i][0])==int(y[i][0]):
+            C+=1
+            if int(y[i][0])==0:
+                tn+=1
+            else:
+                tp+=1
+        elif int(y[i][0])==0:
+            fp+=1
+        elif int(y[i][0])==1:
+            fn+=1
+        T+=1
+    hh.set_postfix(Accuracy=C/T)
+print(tp,fp,tn,fn)
+print(C/T)
+for x,y in Val:
+    tmp1=y
+    tmp2=x
+    break;
+pred=torch.sigmoid(model_ft(tmp2.to(dev)))
+print(pred,tmp1)
+sys.exit(0)
 criterion = nn.BCEWithLogitsLoss()
-
+torch.save(model_ft,'model.pt')
 import torch.optim as optim
-optimizer_ft = optim.Adam(model_ft.parameters(), lr=1e-3)
-
-epochs=10
+optimizer_ft = optim.Adam(model_ft.parameters(), lr=4.2e-5)
+epochs=5
+print('Started T')
 for e in range(epochs):
   OP=0
+  #H=0
   pbar=tqdm.tqdm(Train,desc="Training")
   for x,y in pbar:
     optimizer_ft.zero_grad()
@@ -168,14 +208,17 @@ for e in range(epochs):
     'epoch': e + 1,
     'state_dict': model_ft.state_dict(),
     'optimizer': optimizer_ft.state_dict()
-    }
-  if (e+1)%10==0:
-    optimizer_ft.load_state_dict['lr']*=0.1;
-  print(f"Epochs[{e+1}/{epochs}]Loss: {OP/x.shape[0]} Acc:")
+   }
+  pbar.set_postfix(TrainLoss=loss.item())
+  torch.save(model_ft,'model.pt')
+  print("Validating")
+  H=0;
+  for x,y in tqdm.tqdm(Val,desc="Training"):
+      x,y=x.to(dev),y.to(dev)
+      loss_p=criterion(model_ft(x),y)
+      H+=loss_p.item()
 
-model_ft
+  print(f"Epochs[{e+1}/{epochs}] TrainLoss: {OP/len(Train)} and ValLoss:{H/len(Val)}")
+  with open("V.txt","w") as ff:
+      ff.write(f"Epochs [{str(e+1)}] TrainLoss :{str(OP/len(Train))} and ValLoss:{str(H/len(Val))}\n")
 
-plt.imshow(func_(imread('/content/subham/BRACS_1476_DCIS_14.png')))
-
-class Network(nn.Module):
-  def __init__(self,shape=3):

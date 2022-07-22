@@ -1,0 +1,1 @@
+Epochs [5] TrainLoss :0.3925589641928673 and ValLoss:0.3542167821733078
